@@ -1,0 +1,70 @@
+# Poool Setup
+
+Article Description: Von Null auf Hundert: Das Poool Setup in kürzester Zeit gemeistert
+Last Updated: 18. August 2025
+Published: Yes
+Suggested: Yes
+
+# Inhalt
+
+Hier finden Sie Schritt für Schritt alles, was Sie für die Einrichtung von Poool benötigen. Wir starten bei den Basics und arbeiten uns stetig weiter vor. 
+
+Aber alles zu seiner Zeit.
+
+# Erster Überblick
+
+In diesem Video verschaffen wir uns einen ersten Überblick über Poool und zeigen Ihnen, wie wir unseren Arbeitstag mit Poool strukturieren.
+
+[https://vimeo.com/799814263](https://vimeo.com/799814263)
+
+# Poool Setup
+
+Um sicherzustellen, dass Sie mit Poool optimal durchstarten können, ist es wichtig, die Software gemäß Ihren **individuellen Anforderungen und Bedürfnissen** einzurichten. Mit diesem Guide unterstützen wir Sie Schritt für Schritt bei der **Initialkonfiguration** von Poool und begleiten Sie durch den gesamten Prozess – **von Anfang bis Ende**. So können Sie sicher sein, dass Ihre Arbeitsumgebung optimal auf Ihre auf Ihre **Anforderungen** zugeschnitten ist und Sie das volle **Potenzial unserer Software** **ausschöpfen** können.
+
+## 1. Firmendaten pflegen
+
+Im ersten Schritt legen Sie im Adressbuch Ihren eigenen **Kontaktdatensatz** an.
+
+[Firmendaten](Firmendaten%20d08490c6414f4fc2867ccb06cf18744b.md) 
+
+## 2. Preislisten
+
+Die Preisliste stellt eine der **essentiellen Konfigurationen** innerhalb Ihrer **Poool-Instanz** dar. Sie definiert die von Ihnen angebotenen Leistungen sowie deren Preise. Sobald Sie diesen Schritt abgeschlossen haben, haben Sie erfolgreich Ihre erste Preisliste erstellt und sind nun in der Lage, individuelle Preislisten für Ihre Kund:innen anzufertigen. 
+
+[Preislisten](Preislisten%2032d214225e994d0998a815ac98ed3d95.md) 
+
+## 3. Mitarbeiter:innen anlegen
+
+Als Nächstes legen Sie die **Zugänge für Ihre Kollegen** an. Am Ende dieses Schritts haben alle angelegten Mitarbeiter die Möglichkeit, in Poool einzusteigen und Sie beim Setup zu unterstützen.
+
+[Anlage der Mitarbeiter](Anlage%20der%20Mitarbeiter%20546662b8693f4916890e027a8ad502d9.md) 
+
+## 4. Umsatzsteuer
+
+Durch die **Einrichtung der Umsatzsteuer** entfällt die manuelle Kalkulation der Umsatzsteuer bei Ihren Kalkulationen und Rechnungen. Dies spart Zeit und ermöglicht eine verbesserte Finanzplanung und höhere Transparenz in der Buchhaltung.
+
+[Umsatzsteuersätze](Umsatzsteuers%C3%A4tze%205bc2aebafa8d40d9a820b05bfe19d57e.md) 
+
+## 5. Nummernkreise konfigurieren
+
+Viele Datensätze erhalten in Poool eine **automatisch fortlaufende Nummer**. Das bekannteste Beispiel ist sicher die **Rechnungsnummer**. In diesem Schritt werden Sie Ihre **Rechnungsnummer** festlegen. Sie können aber auch die Nummern Ihrer **Kunden, Lieferanten, Angebote und Projekte** anpassen.
+
+[Nummernkreise](Nummernkreise%20ff726faf208d43be813a91184cf85d5b.md) 
+
+## 6. Textbausteine
+
+Kein Muss, aber definitiv ein Schritt, der Ihnen in Zukunft viel Arbeit abnehmen wird. Hier erfahren Sie alles zum Thema **Einrichtung von Textbausteinen** für **Angebote, Aufträge und Rechnungen**. Zum Abschluss haben Sie personalisierte Texte für Ihre Dokumente.
+
+[Dokumenten- und Textvorlagen](Dokumenten-%20und%20Textvorlagen%20f9ca4ac980c74972bf8c9b248bb0d258.md) 
+
+## 7. Mahnwesen
+
+Schon etwas weiter in die Zukunft gedacht – aber unter Umständen irgendwann notwendig: **das Mahnwesen**. Am Ende dieses Schritts haben Sie Ihre **Mahnstufen** konfiguriert.
+
+[Mahnwesen](Mahnwesen%2077f0369b035c4418a383c39f72cd5f1e.md) 
+
+## 8. Dashboard
+
+Zum Abschluss wird’s persönlich: Mit Ihrem persönlichen **Dashboard** gestalten Sie Ihre Startseite in Poool ganz nach Ihren Wünschen.
+
+[Dashboard](Dashboard%2020400be653b347f3a29ab374b4cb154f.md)
