@@ -21,6 +21,11 @@ venv.bak/
 chroma_db/
 *.sqlite3
 
+# Embedding cache/store (contains potentially sensitive document data)
+cache/
+embeddings_store/
+*.pkl
+
 # IDE
 .vscode/
 .idea/

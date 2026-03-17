@@ -4,6 +4,8 @@ import glob
 import re
 import zipfile
 import io
+import json
+import hashlib
 from typing import List
 from dotenv import load_dotenv
 import anthropic
@@ -15,45 +17,183 @@ import pickle
 load_dotenv()
 
 # Cache-Pfad für persistente Speicherung
-CACHE_DIR = "./cache"
-EMBEDDINGS_CACHE_FILE = os.path.join(CACHE_DIR, "embeddings_cache.pkl")
+CACHE_DIR = "./embeddings_store"
+EMBEDDINGS_CACHE_FILE = os.path.join(CACHE_DIR, "embeddings_index.pkl")
+DOCUMENT_HASH_FILE = os.path.join(CACHE_DIR, "document_hashes.json")
 
 def ensure_cache_dir():
     """Stellt sicher, dass das Cache-Verzeichnis existiert."""
     if not os.path.exists(CACHE_DIR):
         os.makedirs(CACHE_DIR)
 
-def save_embeddings_cache(documents, embeddings, docs_dir):
-    """Speichert Dokumente und Embeddings persistent."""
+def calculate_document_hash(documents):
+    """Berechnet einen Hash für alle Dokumente zur Änderungserkennung."""
+    content_hash = hashlib.md5()
+    for doc in sorted(documents, key=lambda x: x['source']):
+        content_hash.update(doc['content'].encode('utf-8'))
+        content_hash.update(doc['source'].encode('utf-8'))
+    return content_hash.hexdigest()
+
+def save_document_hashes(documents, docs_dir):
+    """Speichert Hashes der aktuellen Dokumente."""
     ensure_cache_dir()
+    doc_hashes = {}
+    for doc in documents:
+        file_hash = hashlib.md5(doc['content'].encode('utf-8')).hexdigest()
+        doc_hashes[doc['source']] = {
+            'hash': file_hash,
+            'chunk_id': doc['chunk_id']
+        }
+    
+    hash_data = {
+        'docs_dir': docs_dir,
+        'document_hashes': doc_hashes,
+        'total_hash': calculate_document_hash(documents),
+        'total_chunks': len(documents)
+    }
+    
+    with open(DOCUMENT_HASH_FILE, 'w', encoding='utf-8') as f:
+        json.dump(hash_data, f, indent=2)
+
+def save_embeddings_cache(documents, embeddings, docs_dir):
+    """Speichert Dokumente und Embeddings DAUERHAFT."""
+    ensure_cache_dir()
+    
+    # Speichere Dokument-Hashes für Änderungserkennung
+    save_document_hashes(documents, docs_dir)
+    
+    # Speichere Embeddings und Dokumente
     cache_data = {
         'documents': documents,
         'embeddings': embeddings,
         'docs_dir': docs_dir,
-        'timestamp': os.path.getmtime(docs_dir) if os.path.exists(docs_dir) else 0
+        'total_hash': calculate_document_hash(documents),
+        'created_timestamp': os.path.getmtime(docs_dir) if os.path.exists(docs_dir) else 0,
+        'version': '2.0'  # Für zukünftige Kompatibilität
     }
     
     with open(EMBEDDINGS_CACHE_FILE, 'wb') as f:
         pickle.dump(cache_data, f)
+    
+    st.success(f"💾 Embeddings dauerhaft gespeichert in {CACHE_DIR}/")
 
-def load_embeddings_cache(docs_dir):
-    """Lädt gespeicherte Embeddings, falls verfügbar und aktuell."""
+def check_documents_changed(docs_dir):
+    """Prüft ob sich Dokumente seit dem letzten Cache geändert haben."""
+    if not os.path.exists(DOCUMENT_HASH_FILE):
+        return True  # Kein Hash-File = Neuindexierung nötig
+    
+    try:
+        # Lade gespeicherte Hashes
+        with open(DOCUMENT_HASH_FILE, 'r', encoding='utf-8') as f:
+            stored_hash_data = json.load(f)
+        
+        # Lade aktuelle Dokumente für Vergleich
+        current_documents = load_markdown_files(docs_dir)
+        if not current_documents:
+            return True
+        
+        # Vergleiche Gesamt-Hash
+        current_total_hash = calculate_document_hash(current_documents)
+        stored_total_hash = stored_hash_data.get('total_hash')
+        
+        if current_total_hash != stored_total_hash:
+            st.info(f"📝 Dokument-Änderungen erkannt - Cache wird aktualisiert")
+            return True
+        
+        return False  # Keine Änderungen
+        
+    except Exception as e:
+        st.warning(f"Hash-Vergleich fehlgeschlagen: {e}")
+        return True  # Bei Fehlern sicher neu indexieren
+
+def validate_cache_integrity(cache_data):
+    """Überprüft die Integrität der Cache-Daten."""
+    required_fields = ['documents', 'embeddings', 'docs_dir', 'version']
+    
+    for field in required_fields:
+        if field not in cache_data:
+            return False, f"Fehlendes Feld: {field}"
+    
+    # Überprüfe Datentypen
+    if not isinstance(cache_data['documents'], list):
+        return False, "Dokumente sind kein Liste"
+    
+    if len(cache_data['documents']) == 0:
+        return False, "Keine Dokumente im Cache"
+    
+    # Überprüfe Struktur der Dokumente
+    for i, doc in enumerate(cache_data['documents'][:3]):  # Prüfe erste 3
+        required_doc_fields = ['content', 'source', 'chunk_id', 'title']
+        for field in required_doc_fields:
+            if field not in doc:
+                return False, f"Dokument {i} fehlt Feld: {field}"
+    
+    # Überprüfe Embeddings-Form
+    try:
+        embeddings = cache_data['embeddings']
+        if not isinstance(embeddings, tuple) or len(embeddings) != 2:
+            return False, "Embeddings haben falsche Struktur"
+        
+        import numpy as np
+        if not all(isinstance(emb, np.ndarray) for emb in embeddings):
+            return False, "Embeddings sind keine NumPy Arrays"
+        
+        # Überprüfe ob Anzahl Embeddings = Anzahl Dokumente
+        if len(embeddings[0]) != len(cache_data['documents']):
+            return False, "Mismatch zwischen Embeddings und Dokumenten"
+            
+    except Exception as e:
+        return False, f"Embeddings-Validierung fehlgeschlagen: {e}"
+    
+    return True, "OK"
+
+def load_embeddings_cache(docs_dir=None, force_check=False):
+    """Lädt gespeicherte Embeddings mit Sicherheitsprüfungen."""
     if not os.path.exists(EMBEDDINGS_CACHE_FILE):
         return None, None
     
     try:
+        # Sicherheitsprüfung: Dateigröße
+        file_size = os.path.getsize(EMBEDDINGS_CACHE_FILE)
+        max_size = 500 * 1024 * 1024  # 500MB Limit
+        if file_size > max_size:
+            st.error(f"❌ Cache-Datei zu groß ({file_size / 1024 / 1024:.1f}MB). Sicherheitshalber nicht geladen.")
+            return None, None
+        
+        # Lade Cache-Daten
         with open(EMBEDDINGS_CACHE_FILE, 'rb') as f:
             cache_data = pickle.load(f)
         
-        # Prüfe ob Cache noch aktuell ist
-        if cache_data.get('docs_dir') == docs_dir:
-            current_timestamp = os.path.getmtime(docs_dir) if os.path.exists(docs_dir) else 0
-            if cache_data.get('timestamp', 0) >= current_timestamp:
-                return cache_data['documents'], cache_data['embeddings']
+        # Validiere Integrität
+        is_valid, validation_msg = validate_cache_integrity(cache_data)
+        if not is_valid:
+            st.error(f"❌ Cache-Validierung fehlgeschlagen: {validation_msg}")
+            return None, None
         
-        return None, None
+        # Sicherheitsprüfung: Prüfe ob docs_dir sicher ist
+        if docs_dir:
+            # Verhindere Directory Traversal
+            docs_dir = os.path.abspath(docs_dir)
+            if not docs_dir.startswith(os.path.abspath(".")):
+                st.error("❌ Sicherheitsfehler: Zugriff außerhalb des App-Verzeichnisses nicht erlaubt")
+                return None, None
+        
+        # Wenn kein docs_dir angegeben oder force_check = False, lade einfach
+        if not docs_dir or not force_check:
+            return cache_data['documents'], cache_data['embeddings']
+        
+        # Nur bei expliziter Prüfung: Schaue ob Dokumente geändert wurden
+        if not check_documents_changed(docs_dir):
+            return cache_data['documents'], cache_data['embeddings']
+        else:
+            return None, None  # Neuindexierung nötig
+        
     except Exception as e:
-        st.warning(f"Cache konnte nicht geladen werden: {e}")
+        st.error(f"❌ Fehler beim Laden der Embeddings: {e}")
+        # Bei Verdacht auf korrupte Datei: Lösche Cache
+        if "pickle" in str(e).lower() or "corrupt" in str(e).lower():
+            st.warning("🔧 Cache wird zurückgesetzt...")
+            clear_cache()
         return None, None
 
 def get_cache_info():
@@ -96,8 +236,8 @@ def check_password():
     if st.session_state.authenticated:
         return True
     
-    st.title("🔐 RAG Chat Assistant - Login")
-    st.markdown("**Bitte gib das Passwort ein, um fortzufahren:**")
+    st.title("Poool Academy Helper - Login")
+    st.markdown("**Bitte gib das Passwort ein, um auf den Academy Helper zuzugreifen:**")
     
     with st.form("password_form"):
         password = st.text_input("Passwort:", type="password", help="Kontaktiere den Administrator für das Passwort")
@@ -113,17 +253,19 @@ def check_password():
                 st.stop()
     
     # Info-Box für Benutzer
-    with st.expander("ℹ️ Über diese App"):
+    with st.expander("ℹ️ Über den Poool Academy Helper"):
         st.markdown("""
-        **RAG Chat Assistant** ist ein intelligenter Chat-Assistent mit Dokumenten-basierter Suche.
+        **Poool Academy Helper** ist dein intelligenter Assistent für alle Fragen rund um Poool.
         
-        **Features:**
-        - 🔍 Intelligente Dokumentensuche
-        - 💬 Chat-basierte Q&A
-        - 📁 Dokument-Upload (einzelne Dateien oder ZIP)
-        - 🔧 Erweiterte Suchfunktionen
+        **Was kannst du fragen?**
+        - 📋 Wie erstelle ich Rechnungen und Angebote?
+        - 📅 Wie funktioniert die Terminbuchung?
+        - 👥 Wie verwalte ich Kundendaten?
+        - 🎓 Wie erstelle und verwalte ich Kurse?
+        - 📊 Wie nutze ich das Reporting?
+        - 💳 Wie richte ich Zahlungen ein?
         
-        **Benötigst du Zugang?** Kontaktiere den Administrator.
+        **Benötigst du Zugang?** Kontaktiere das Poool Team.
         """)
     
     st.stop()
@@ -141,18 +283,18 @@ if 'cache_loaded' not in st.session_state:
     st.session_state.cache_loaded = False
 
 def auto_load_cache_if_available():
-    """Lädt automatisch Cache beim App-Start, falls verfügbar."""
+    """Lädt automatisch Cache beim App-Start - IMMER wenn vorhanden."""
     if not st.session_state.cache_loaded and st.session_state.document_store is None:
-        local_docs_path = "./documents"
-        if os.path.exists(local_docs_path):
-            default_docs_dir = os.environ.get("DOCS_DIR", local_docs_path)
-        else:
-            default_docs_dir = os.environ.get("DOCS_DIR", "./documents")
+        # Versuche IMMER zuerst den dauerhaften Cache zu laden
+        cached_docs, cached_embeddings = load_embeddings_cache()  # Ohne force_check
         
-        cached_docs, cached_embeddings = load_embeddings_cache(default_docs_dir)
         if cached_docs and cached_embeddings:
             st.session_state.document_store = cached_docs
             st.session_state.embeddings = cached_embeddings
+            # Zeige Info über geladene Daten
+            cache_info = get_cache_info()
+            if cache_info:
+                st.sidebar.success(f"🚀 Index automatisch geladen: {cache_info['doc_count']} Dokumente")
         
         st.session_state.cache_loaded = True
 
@@ -450,7 +592,7 @@ KRITISCH: Denke dir NIE etwas aus! Nutze NUR das Wissen aus den bereitgestellten
         return f"Fehler bei der Antwortgenerierung: {e}"
 
 # Streamlit UI
-st.set_page_config(page_title="RAG Chat Assistant", page_icon="🔐", layout="wide")
+st.set_page_config(page_title="Poool Academy Helper", page_icon="📚", layout="wide")
 
 # Passwort-Schutz prüfen
 check_password()
@@ -464,8 +606,8 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
 
-st.title("🤖 RAG Chat Assistant")
-st.markdown("Ein intelligenter Chat-Assistent mit Dokumenten-basierter Suche")
+st.title("Poool Academy Helper")
+st.markdown("Dein intelligenter Assistent für alle Fragen rund um Poool - stelle Fragen zu Funktionen, Abläufen und Best Practices!")
 
 # Sidebar
 with st.sidebar:
@@ -482,14 +624,14 @@ with st.sidebar:
     
     if st.button("📚 Dokumente laden und indexieren"):
         if docs_dir and os.path.exists(docs_dir):
-            # Prüfe zuerst Cache
-            with st.spinner("Prüfe Cache..."):
-                cached_docs, cached_embeddings = load_embeddings_cache(docs_dir)
+            # Prüfe zuerst ob Cache aktuell ist
+            with st.spinner("Prüfe vorhandenen Index..."):
+                cached_docs, cached_embeddings = load_embeddings_cache(docs_dir, force_check=True)
             
             if cached_docs and cached_embeddings:
                 st.session_state.document_store = cached_docs
                 st.session_state.embeddings = cached_embeddings
-                st.success(f"✅ Index aus Cache geladen: {len(cached_docs)} Text-Stücke!")
+                st.success(f"✅ Vorhandener Index geladen: {len(cached_docs)} Text-Stücke!")
             else:
                 with st.spinner("Lade und verarbeite Dokumente..."):
                     try:
@@ -514,17 +656,34 @@ with st.sidebar:
         else:
             st.error("Verzeichnis existiert nicht!")
     
-    # Cache-Informationen
+    # Embedding-Store Informationen
     cache_info = get_cache_info()
     if cache_info:
-        st.info(f"💾 Cache verfügbar: {cache_info['doc_count']} Docs (erstellt: {cache_info['cache_time']})")
-        if st.button("🗑️ Cache löschen"):
-            if clear_cache():
-                st.session_state.document_store = None
-                st.session_state.embeddings = None
-                st.session_state.cache_loaded = False
-                st.success("Cache gelöscht!")
-                st.rerun()
+        st.info(f"💾 Index gespeichert: {cache_info['doc_count']} Docs (erstellt: {cache_info['cache_time']})")
+        with st.expander("🔧 Index-Verwaltung"):
+            st.markdown("**Dauerhafter Embedding-Store**")
+            st.markdown(f"📁 Verzeichnis: `{cache_info.get('docs_dir', 'Unbekannt')}`")
+            st.markdown(f"📊 Chunks: {cache_info['doc_count']}")
+            st.markdown(f"⏰ Erstellt: {cache_info['cache_time']}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Index prüfen", help="Prüft ob Dokumente geändert wurden"):
+                    if docs_dir and os.path.exists(docs_dir):
+                        if check_documents_changed(docs_dir):
+                            st.warning("⚠️ Änderungen erkannt - Neuindexierung empfohlen")
+                        else:
+                            st.success("✅ Index ist aktuell")
+            with col2:
+                if st.button("🗑️ Index löschen", help="Löscht gespeicherte Embeddings"):
+                    if clear_cache():
+                        st.session_state.document_store = None
+                        st.session_state.embeddings = None
+                        st.session_state.cache_loaded = False
+                        st.success("Index gelöscht!")
+                        st.rerun()
+    else:
+        st.warning("💾 Kein Index vorhanden - Dokumente müssen indexiert werden")
     
     if st.session_state.document_store:
         st.success(f"✅ {len(st.session_state.document_store)} Chunks bereit!")
@@ -536,13 +695,33 @@ with st.sidebar:
         st.rerun()
 
 # Chat Interface
-st.header("💬 Chat")
+st.header("💬 Chat mit dem Academy Helper")
+
+# Beispiel-Fragen anzeigen
+if not st.session_state.messages:
+    st.markdown("### 💡 Beispiel-Fragen die du stellen kannst:")
+    example_questions = [
+        "Wie erstellt man eine Rechnung?",
+        "Wie funktioniert die Terminbuchung?",
+        "Wie verwalte ich Kundendaten?",
+        "Wie erstelle ich einen Kurs?",
+        "Wie funktioniert das Reporting?",
+        "Wie richte ich Zahlungsmethoden ein?"
+    ]
+    
+    cols = st.columns(2)
+    for i, question in enumerate(example_questions):
+        with cols[i % 2]:
+            if st.button(f"❓ {question}", key=f"example_q_{i}", use_container_width=True):
+                # Frage automatisch in Chat einfügen
+                st.session_state.messages.append({"role": "user", "content": question})
+                st.rerun()
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("Stelle deine Frage..."):
+if prompt := st.chat_input("Frag den Academy Helper..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
