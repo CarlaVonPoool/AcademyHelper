@@ -713,8 +713,18 @@ if not st.session_state.messages:
     for i, question in enumerate(example_questions):
         with cols[i % 2]:
             if st.button(f"❓ {question}", key=f"example_q_{i}", use_container_width=True):
-                # Frage automatisch in Chat einfügen
+                # Frage automatisch in Chat einfügen und beantworten
                 st.session_state.messages.append({"role": "user", "content": question})
+                
+                # Automatische Antwort generieren, wenn Dokumente geladen sind
+                if st.session_state.document_store:
+                    with st.spinner("Academy Helper antwortet..."):
+                        response = answer_question(question)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                else:
+                    error_msg = "⚠️ Bitte lade zuerst Dokumente über die Sidebar."
+                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                
                 st.rerun()
 
 for message in st.session_state.messages:
