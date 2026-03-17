@@ -14,6 +14,78 @@ import pickle
 
 load_dotenv()
 
+# Cache-Pfad für persistente Speicherung
+CACHE_DIR = "./cache"
+EMBEDDINGS_CACHE_FILE = os.path.join(CACHE_DIR, "embeddings_cache.pkl")
+
+def ensure_cache_dir():
+    """Stellt sicher, dass das Cache-Verzeichnis existiert."""
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+
+def save_embeddings_cache(documents, embeddings, docs_dir):
+    """Speichert Dokumente und Embeddings persistent."""
+    ensure_cache_dir()
+    cache_data = {
+        'documents': documents,
+        'embeddings': embeddings,
+        'docs_dir': docs_dir,
+        'timestamp': os.path.getmtime(docs_dir) if os.path.exists(docs_dir) else 0
+    }
+    
+    with open(EMBEDDINGS_CACHE_FILE, 'wb') as f:
+        pickle.dump(cache_data, f)
+
+def load_embeddings_cache(docs_dir):
+    """Lädt gespeicherte Embeddings, falls verfügbar und aktuell."""
+    if not os.path.exists(EMBEDDINGS_CACHE_FILE):
+        return None, None
+    
+    try:
+        with open(EMBEDDINGS_CACHE_FILE, 'rb') as f:
+            cache_data = pickle.load(f)
+        
+        # Prüfe ob Cache noch aktuell ist
+        if cache_data.get('docs_dir') == docs_dir:
+            current_timestamp = os.path.getmtime(docs_dir) if os.path.exists(docs_dir) else 0
+            if cache_data.get('timestamp', 0) >= current_timestamp:
+                return cache_data['documents'], cache_data['embeddings']
+        
+        return None, None
+    except Exception as e:
+        st.warning(f"Cache konnte nicht geladen werden: {e}")
+        return None, None
+
+def get_cache_info():
+    """Gibt Informationen über den Cache zurück."""
+    if not os.path.exists(EMBEDDINGS_CACHE_FILE):
+        return None
+    
+    try:
+        with open(EMBEDDINGS_CACHE_FILE, 'rb') as f:
+            cache_data = pickle.load(f)
+        
+        import datetime
+        timestamp = cache_data.get('timestamp', 0)
+        cache_time = datetime.datetime.fromtimestamp(timestamp).strftime("%d.%m.%Y %H:%M:%S")
+        doc_count = len(cache_data.get('documents', []))
+        docs_dir = cache_data.get('docs_dir', 'Unbekannt')
+        
+        return {
+            'doc_count': doc_count,
+            'cache_time': cache_time,
+            'docs_dir': docs_dir
+        }
+    except:
+        return None
+
+def clear_cache():
+    """Löscht den Cache."""
+    if os.path.exists(EMBEDDINGS_CACHE_FILE):
+        os.remove(EMBEDDINGS_CACHE_FILE)
+        return True
+    return False
+
 # Passwort-Authentifizierung
 def check_password():
     """Überprüft das Passwort und zeigt Login-Form an."""
@@ -65,6 +137,24 @@ if 'messages' not in st.session_state:
     st.session_state.messages = []
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
+if 'cache_loaded' not in st.session_state:
+    st.session_state.cache_loaded = False
+
+def auto_load_cache_if_available():
+    """Lädt automatisch Cache beim App-Start, falls verfügbar."""
+    if not st.session_state.cache_loaded and st.session_state.document_store is None:
+        local_docs_path = "./documents"
+        if os.path.exists(local_docs_path):
+            default_docs_dir = os.environ.get("DOCS_DIR", local_docs_path)
+        else:
+            default_docs_dir = os.environ.get("DOCS_DIR", "./documents")
+        
+        cached_docs, cached_embeddings = load_embeddings_cache(default_docs_dir)
+        if cached_docs and cached_embeddings:
+            st.session_state.document_store = cached_docs
+            st.session_state.embeddings = cached_embeddings
+        
+        st.session_state.cache_loaded = True
 
 def simple_preprocessing(text: str) -> str:
     """Einfache Text-Vorverarbeitung."""
@@ -365,6 +455,9 @@ st.set_page_config(page_title="RAG Chat Assistant", page_icon="🔐", layout="wi
 # Passwort-Schutz prüfen
 check_password()
 
+# Automatisch Cache laden, falls verfügbar
+auto_load_cache_if_available()
+
 # Logout-Button in der Sidebar
 with st.sidebar:
     if st.button("🚪 Abmelden"):
@@ -389,24 +482,49 @@ with st.sidebar:
     
     if st.button("📚 Dokumente laden und indexieren"):
         if docs_dir and os.path.exists(docs_dir):
-            with st.spinner("Lade und verarbeite Dokumente..."):
-                try:
-                    documents = load_markdown_files(docs_dir)
-                    if documents:
-                        st.write(f"Gefunden: {len(documents)} Dokument-Chunks")
-                        
-                        with st.spinner("Erstelle Embeddings..."):
-                            embeddings = create_embeddings(documents)
-                        
-                        st.session_state.document_store = documents
-                        st.session_state.embeddings = embeddings
-                        st.success(f"✅ Index erstellt aus {len(documents)} Text-Stücken!")
-                    else:
-                        st.error("Keine Markdown-Dateien gefunden!")
-                except Exception as e:
-                    st.error(f"Fehler beim Indexieren: {e}")
+            # Prüfe zuerst Cache
+            with st.spinner("Prüfe Cache..."):
+                cached_docs, cached_embeddings = load_embeddings_cache(docs_dir)
+            
+            if cached_docs and cached_embeddings:
+                st.session_state.document_store = cached_docs
+                st.session_state.embeddings = cached_embeddings
+                st.success(f"✅ Index aus Cache geladen: {len(cached_docs)} Text-Stücke!")
+            else:
+                with st.spinner("Lade und verarbeite Dokumente..."):
+                    try:
+                        documents = load_markdown_files(docs_dir)
+                        if documents:
+                            st.write(f"Gefunden: {len(documents)} Dokument-Chunks")
+                            
+                            with st.spinner("Erstelle Embeddings..."):
+                                embeddings = create_embeddings(documents)
+                            
+                            # Speichere in Cache
+                            with st.spinner("Speichere Cache..."):
+                                save_embeddings_cache(documents, embeddings, docs_dir)
+                            
+                            st.session_state.document_store = documents
+                            st.session_state.embeddings = embeddings
+                            st.success(f"✅ Index erstellt und gespeichert: {len(documents)} Text-Stücke!")
+                        else:
+                            st.error("Keine Markdown-Dateien gefunden!")
+                    except Exception as e:
+                        st.error(f"Fehler beim Indexieren: {e}")
         else:
             st.error("Verzeichnis existiert nicht!")
+    
+    # Cache-Informationen
+    cache_info = get_cache_info()
+    if cache_info:
+        st.info(f"💾 Cache verfügbar: {cache_info['doc_count']} Docs (erstellt: {cache_info['cache_time']})")
+        if st.button("🗑️ Cache löschen"):
+            if clear_cache():
+                st.session_state.document_store = None
+                st.session_state.embeddings = None
+                st.session_state.cache_loaded = False
+                st.success("Cache gelöscht!")
+                st.rerun()
     
     if st.session_state.document_store:
         st.success(f"✅ {len(st.session_state.document_store)} Chunks bereit!")
