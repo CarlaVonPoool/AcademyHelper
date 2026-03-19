@@ -13,6 +13,7 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import pickle
+from n8n_webhook_logger import N8NWebhookLogger
 
 load_dotenv()
 
@@ -281,6 +282,16 @@ if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'cache_loaded' not in st.session_state:
     st.session_state.cache_loaded = False
+if 'session_id' not in st.session_state:
+    import uuid
+    st.session_state.session_id = str(uuid.uuid4())[:8]
+if 'n8n_logger' not in st.session_state:
+    # N8N Webhook URL aus Environment/Secrets - fallback auf lokalen N8N
+    n8n_url = os.environ.get("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/feedback")
+    n8n_api_key = os.environ.get("N8N_API_KEY")  # Optional für zusätzliche Sicherheit
+    st.session_state.n8n_logger = N8NWebhookLogger(n8n_url, n8n_api_key)
+if 'last_interaction_id' not in st.session_state:
+    st.session_state.last_interaction_id = None
 
 def auto_load_cache_if_available():
     """Lädt automatisch Cache beim App-Start - IMMER wenn vorhanden."""
@@ -516,16 +527,16 @@ def finalize_document_processing(documents):
     except Exception as e:
         st.error(f"Fehler beim Erstellen der Embeddings: {e}")
 
-def answer_question(question: str) -> str:
+def answer_question(question: str) -> tuple:
     """Beantwortet eine Frage."""
     if st.session_state.document_store is None:
-        return "Index wurde noch nicht initialisiert. Bitte lade zuerst Dokumente."
+        return "Index wurde noch nicht initialisiert. Bitte lade zuerst Dokumente.", [], "", 0.0
     
     # Suche relevante Dokumente
     results = search_documents(question)
     
     if not results:
-        return "Keine relevanten Dokumente gefunden."
+        return "Keine relevanten Dokumente gefunden.", [], "", 0.0
     
     # Gruppiere nach Quellen
     sources = set()
@@ -587,9 +598,12 @@ KRITISCH: Denke dir NIE etwas aus! Nutze NUR das Wissen aus den bereitgestellten
                 {"role": "user", "content": f"Kontext aus mehreren Dokumenten:\n\n{context}\n\n---\n\nFrage: {question}\n\nVerfügbare Quellen:\n{source_list}"}
             ]
         )
-        return message.content[0].text
+        answer_text = message.content[0].text
+        # Berechne Konfidenz basierend auf Anzahl gefundener Dokumente
+        confidence = min(len(results) / 10.0, 1.0) if results else 0.0
+        return answer_text, [os.path.basename(s).replace('.md', '') for s in sources], context[:500], confidence
     except Exception as e:
-        return f"Fehler bei der Antwortgenerierung: {e}"
+        return f"Fehler bei der Antwortgenerierung: {e}", [], "", 0.0
 
 # Streamlit UI
 st.set_page_config(page_title="Poool Academy Helper", page_icon="📚", layout="wide")
@@ -691,8 +705,24 @@ with st.sidebar:
         st.warning("⚠️ Index noch nicht geladen")
     
     if st.button("🗑️ Chat-Verlauf löschen"):
+        # Sende Session-Daten an N8N bevor wir löschen
+        if hasattr(st.session_state, 'n8n_logger'):
+            st.session_state.n8n_logger.send_session_data(reason="chat_cleared")
         st.session_state.messages = []
         st.rerun()
+    
+    # N8N Logging Status
+    st.markdown("---")
+    st.markdown("📊 **N8N Logging**")
+    if hasattr(st.session_state, 'n8n_logger'):
+        try:
+            n8n_stats = st.session_state.n8n_logger.get_session_stats()
+            st.caption(f"Interaktionen: {n8n_stats['interactions']}")
+            st.caption(f"Feedback: {n8n_stats['feedback_count']}")
+            if n8n_stats['interactions'] > 0:
+                st.caption(f"Session seit: {n8n_stats['session_start'][:10]}")
+        except:
+            st.caption("N8N Logger aktiv")
 
 # Chat Interface
 st.header("💬 Chat mit dem Academy Helper")
@@ -719,7 +749,16 @@ if not st.session_state.messages:
                 # Automatische Antwort generieren, wenn Dokumente geladen sind
                 if st.session_state.document_store:
                     with st.spinner("Academy Helper antwortet..."):
-                        response = answer_question(question)
+                        response, sources, context_snippet, confidence = answer_question(question)
+                        # Logge auch Beispiel-Fragen in N8N
+                        interaction_id = st.session_state.n8n_logger.log_interaction(
+                            question=question,
+                            answer=response,
+                            sources=sources,
+                            context_snippet=context_snippet,
+                            confidence_score=confidence
+                        )
+                        st.session_state.last_interaction_id = interaction_id
                     st.session_state.messages.append({"role": "assistant", "content": response})
                 else:
                     error_msg = "⚠️ Bitte lade zuerst Dokumente über die Sidebar."
@@ -739,8 +778,60 @@ if prompt := st.chat_input("Frag den Academy Helper..."):
     if st.session_state.document_store:
         with st.chat_message("assistant"):
             with st.spinner("Suche nach relevanten Informationen..."):
-                response = answer_question(prompt)
+                response, sources, context_snippet, confidence = answer_question(prompt)
+                
+                # Logge die Interaktion in N8N
+                interaction_id = st.session_state.n8n_logger.log_interaction(
+                    question=prompt,
+                    answer=response,
+                    sources=sources,
+                    context_snippet=context_snippet,
+                    confidence_score=confidence
+                )
+                st.session_state.last_interaction_id = interaction_id
+                
             st.markdown(response)
+            
+            # Feedback-Buttons
+            col1, col2, col3 = st.columns([1, 1, 6])
+            with col1:
+                if st.button("👍", key=f"helpful_{interaction_id}", help="War diese Antwort hilfreich?"):
+                    st.session_state.n8n_logger.add_feedback(
+                        interaction_id=interaction_id,
+                        is_helpful=True,
+                        is_accurate=True
+                    )
+                    st.success("Danke für dein Feedback!", icon="✅")
+            
+            with col2:
+                if st.button("👎", key=f"unhelpful_{interaction_id}", help="War diese Antwort nicht hilfreich?"):
+                    # Zeige Feedback-Formular
+                    with st.expander("📝 Was war das Problem?", expanded=True):
+                        error_type = st.selectbox(
+                            "Art des Problems:",
+                            ["", "Falsche Information", "Unvollständige Antwort", "Irrelevante Antwort", "Technischer Fehler", "Andere"],
+                            key=f"error_{interaction_id}"
+                        )
+                        user_comment = st.text_area(
+                            "Beschreibe das Problem (optional):",
+                            key=f"comment_{interaction_id}",
+                            height=100
+                        )
+                        expected = st.text_area(
+                            "Was wäre die richtige Antwort? (optional):",
+                            key=f"expected_{interaction_id}",
+                            height=100
+                        )
+                        if st.button("Feedback senden", key=f"submit_{interaction_id}"):
+                            st.session_state.n8n_logger.add_feedback(
+                                interaction_id=interaction_id,
+                                is_helpful=False,
+                                is_accurate=False,
+                                error_type=error_type,
+                                user_comment=user_comment,
+                                expected_answer=expected
+                            )
+                            st.success("Vielen Dank! Dein Feedback hilft uns, besser zu werden.", icon="🙏")
         
         st.session_state.messages.append({"role": "assistant", "content": response})
     else:

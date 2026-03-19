@@ -1,0 +1,144 @@
+{
+  "name": "Streamlit Feedback Logger",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "feedback",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "streamlit-feedback"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "fileName": "={{ DateTime.now().toFormat('yyyy-MM-dd') }}_feedback.jsonl",
+        "fileContent": "={{ JSON.stringify($json.session_data) }}\n",
+        "options": {}
+      },
+      "name": "Write to File",
+      "type": "n8n-nodes-base.writeFile",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.session_data.send_reason }}",
+              "operation": "equal",
+              "value2": "critical_feedback"
+            }
+          ]
+        }
+      },
+      "name": "Check if Critical",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "fileName": "critical_feedback.jsonl",
+        "fileContent": "={{ JSON.stringify({\n  \"timestamp\": $json.timestamp,\n  \"session_id\": $json.session_data.session_id,\n  \"critical_interactions\": $json.session_data.interactions.filter(i => i.feedback && (i.feedback.is_helpful === false || i.feedback.is_accurate === false))\n}) }}\n",
+        "options": {}
+      },
+      "name": "Log Critical Feedback",
+      "type": "n8n-nodes-base.writeFile",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append", 
+        "fileName": "daily_stats.jsonl",
+        "fileContent": "={{ JSON.stringify({\n  \"date\": DateTime.now().toFormat('yyyy-MM-dd'),\n  \"hour\": DateTime.now().toFormat('HH'),\n  \"session_id\": $json.session_data.session_id,\n  \"interactions\": $json.session_data.statistics.total_interactions,\n  \"avg_confidence\": $json.session_data.statistics.avg_confidence,\n  \"feedback_rate\": ($json.session_data.statistics.feedback_received / $json.session_data.statistics.total_interactions * 100) || 0,\n  \"helpful_rate\": ($json.session_data.statistics.helpful_feedback / $json.session_data.statistics.feedback_received * 100) || 0\n}) }}\n",
+        "options": {}
+      },
+      "name": "Log Statistics",
+      "type": "n8n-nodes-base.writeFile", 
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "mode": "webhook",
+        "respondWith": "json",
+        "responseData": "{\n  \"status\": \"success\",\n  \"message\": \"Feedback data logged successfully\",\n  \"session_id\": \"{{ $json.session_data.session_id }}\",\n  \"interactions_count\": {{ $json.session_data.statistics.total_interactions }}\n}"
+      },
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Write to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write to File": {
+      "main": [
+        [
+          {
+            "node": "Check if Critical", 
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Critical": {
+      "main": [
+        [
+          {
+            "node": "Log Critical Feedback",
+            "type": "main", 
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Critical Feedback": {
+      "main": [
+        [
+          {
+            "node": "Log Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Statistics": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
