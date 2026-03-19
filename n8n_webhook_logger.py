@@ -14,9 +14,16 @@ import threading
 from queue import Queue
 import time
 import base64
-from cryptography.fernet import Fernet
 import hmac
 import os
+
+# Optional: Import cryptography nur wenn verfügbar
+try:
+    from cryptography.fernet import Fernet
+    ENCRYPTION_AVAILABLE = True
+except ImportError:
+    ENCRYPTION_AVAILABLE = False
+    print("⚠️ Cryptography library nicht installiert - Verschlüsselung deaktiviert")
 
 class N8NWebhookLogger:
     def __init__(self, n8n_webhook_url: str, api_key: Optional[str] = None):
@@ -33,7 +40,7 @@ class N8NWebhookLogger:
         self.send_queue = Queue()  # Für asynchrones Senden
         
         # Verschlüsselungssetup
-        self.encryption_enabled = bool(api_key)
+        self.encryption_enabled = bool(api_key) and ENCRYPTION_AVAILABLE
         if self.encryption_enabled:
             # Generiere Fernet-Key aus API Key
             key_material = hashlib.sha256(api_key.encode()).digest()

@@ -4,3 +4,5 @@ sentence-transformers
 scikit-learn
 numpy
 python-dotenv
+requests
+cryptography
