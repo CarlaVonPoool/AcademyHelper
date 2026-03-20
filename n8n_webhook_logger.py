@@ -154,6 +154,19 @@ class N8NWebhookLogger:
         
         self.session_data[session_id]["interactions"].append(interaction)
         
+        # OPTION 1: Sofort senden (für Testing/Development)
+        # Uncomment für sofortiges Senden:
+        # self.send_session_data(session_id, reason="immediate_after_interaction")
+        
+        # OPTION 2: Batch nach X Interaktionen
+        # Auto-Send nach 3 Interaktionen
+        if len(self.session_data[session_id]["interactions"]) >= 3:
+            self.send_session_data(session_id, reason="auto_batch_3_interactions")
+        
+        # OPTION 3: Nach erster Interaktion (für Testing)
+        if len(self.session_data[session_id]["interactions"]) == 1:
+            self.send_session_data(session_id, reason="first_interaction")
+        
         return interaction_id
     
     def add_feedback(self,
@@ -184,9 +197,9 @@ class N8NWebhookLogger:
                 }
                 self.session_data[session_id]["feedback_count"] += 1
                 
-                # Bei kritischem Feedback: Sofort senden
-                if is_helpful == False or is_accurate == False:
-                    self.send_session_data(session_id, reason="critical_feedback")
+                # Bei JEDEM Feedback: Sofort senden
+                # Nicht nur bei kritischem Feedback
+                self.send_session_data(session_id, reason="feedback_received")
                 break
     
     def send_session_data(self, session_id: str = None, reason: str = "session_end"):
