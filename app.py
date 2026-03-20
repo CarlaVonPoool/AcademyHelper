@@ -7,6 +7,7 @@ import io
 import json
 import hashlib
 from typing import List
+from datetime import datetime
 from dotenv import load_dotenv
 import anthropic
 from sentence_transformers import SentenceTransformer
@@ -711,7 +712,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
     
-    # N8N Logging Status
+    # N8N Logging Status & Debug
     st.markdown("---")
     st.markdown("📊 **N8N Logging**")
     if hasattr(st.session_state, 'n8n_logger'):
@@ -723,6 +724,33 @@ with st.sidebar:
                 st.caption(f"Session seit: {n8n_stats['session_start'][:10]}")
         except:
             st.caption("N8N Logger aktiv")
+    
+    # Debug Info (nur für Entwicklung)
+    with st.expander("🔧 Debug Info"):
+        st.caption(f"Webhook URL: {os.environ.get('N8N_WEBHOOK_URL', 'NICHT GESETZT')[:50]}...")
+        st.caption(f"API Key gesetzt: {'✅' if os.environ.get('N8N_API_KEY') else '❌'}")
+        if hasattr(st.session_state, 'n8n_logger'):
+            st.caption(f"Logger initialisiert: ✅")
+            st.caption(f"Verschlüsselung: {'✅' if st.session_state.n8n_logger.encryption_enabled else '❌'}")
+            st.caption(f"Queue Größe: {st.session_state.n8n_logger.send_queue.qsize()}")
+        else:
+            st.caption("Logger initialisiert: ❌")
+        
+        # Test-Button
+        if st.button("🧪 Test Webhook"):
+            try:
+                test_id = st.session_state.n8n_logger.log_interaction(
+                    question="TEST: Debug-Frage vom " + datetime.now().strftime("%H:%M:%S"),
+                    answer="TEST: Debug-Antwort",
+                    sources=["debug.md"],
+                    confidence_score=1.0
+                )
+                st.success(f"Test-Interaction geloggt: {test_id}")
+                # Sende sofort
+                st.session_state.n8n_logger.send_session_data(reason="debug_test")
+                st.success("Session-Daten an N8N gesendet!")
+            except Exception as e:
+                st.error(f"Webhook-Test fehlgeschlagen: {e}")
 
 # Chat Interface
 st.header("💬 Chat mit dem Academy Helper")
