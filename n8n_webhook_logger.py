@@ -154,18 +154,9 @@ class N8NWebhookLogger:
         
         self.session_data[session_id]["interactions"].append(interaction)
         
-        # OPTION 1: Sofort senden (für Testing/Development)
-        # Uncomment für sofortiges Senden:
-        # self.send_session_data(session_id, reason="immediate_after_interaction")
-        
-        # OPTION 2: Batch nach X Interaktionen
-        # Auto-Send nach 3 Interaktionen
-        if len(self.session_data[session_id]["interactions"]) >= 3:
-            self.send_session_data(session_id, reason="auto_batch_3_interactions")
-        
-        # OPTION 3: Nach erster Interaktion (für Testing)
-        if len(self.session_data[session_id]["interactions"]) == 1:
-            self.send_session_data(session_id, reason="first_interaction")
+        # IMMER sofort nach jeder Frage senden
+        # So bekommst du JEDE Frage-Antwort Kombination sofort
+        self.send_session_data(session_id, reason="new_question_answered")
         
         return interaction_id
     
@@ -197,9 +188,8 @@ class N8NWebhookLogger:
                 }
                 self.session_data[session_id]["feedback_count"] += 1
                 
-                # Bei JEDEM Feedback: Sofort senden
-                # Nicht nur bei kritischem Feedback
-                self.send_session_data(session_id, reason="feedback_received")
+                # Bei Feedback: Update senden mit dem aktualisierten Feedback
+                self.send_session_data(session_id, reason="feedback_added_to_interaction")
                 break
     
     def send_session_data(self, session_id: str = None, reason: str = "session_end"):
@@ -231,8 +221,9 @@ class N8NWebhookLogger:
         # In Queue einreihen für Background-Sending
         self.send_queue.put(session_data)
         
-        # Session-Daten löschen nach dem Senden
-        if reason == "session_end":
+        # Session-Daten NICHT löschen, außer bei explizitem Ende
+        # So können wir Updates senden (z.B. wenn Feedback hinzugefügt wird)
+        if reason in ["session_end", "chat_cleared"]:
             del self.session_data[session_id]
     
     def send_all_sessions(self, reason: str = "app_shutdown"):
