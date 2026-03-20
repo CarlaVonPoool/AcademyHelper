@@ -222,10 +222,10 @@ class N8NWebhookLogger:
             "total_interactions": len(interactions),
             "avg_confidence": sum(i.get("confidence_score", 0) for i in interactions) / len(interactions) if interactions else 0,
             "feedback_received": session_data["feedback_count"],
-            "helpful_feedback": sum(1 for i in interactions if i.get("feedback", {}).get("is_helpful") == True),
-            "unhelpful_feedback": sum(1 for i in interactions if i.get("feedback", {}).get("is_helpful") == False),
-            "accurate_feedback": sum(1 for i in interactions if i.get("feedback", {}).get("is_accurate") == True),
-            "inaccurate_feedback": sum(1 for i in interactions if i.get("feedback", {}).get("is_accurate") == False),
+            "helpful_feedback": sum(1 for i in interactions if i.get("feedback") and i["feedback"].get("is_helpful") == True),
+            "unhelpful_feedback": sum(1 for i in interactions if i.get("feedback") and i["feedback"].get("is_helpful") == False),
+            "accurate_feedback": sum(1 for i in interactions if i.get("feedback") and i["feedback"].get("is_accurate") == True),
+            "inaccurate_feedback": sum(1 for i in interactions if i.get("feedback") and i["feedback"].get("is_accurate") == False),
         }
         
         # In Queue einreihen für Background-Sending
