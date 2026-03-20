@@ -798,55 +798,7 @@ if not st.session_state.messages:
 for idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        
-        # Zeige Feedback-Buttons für ALLE Assistant-Antworten (auch von Beispiel-Fragen)
-        if message["role"] == "assistant" and message.get("interaction_id"):
-            interaction_id = message["interaction_id"]
-            col1, col2 = st.columns([1, 5])
-            
-            with col1:
-                feedback_key = f"feedback_{interaction_id}"
-                
-                # Zeige Feedback-Auswahl
-                feedback_choice = st.radio(
-                    "War diese Antwort hilfreich?",
-                    ["", "👍 Gut", "👎 Schlecht"],
-                    key=feedback_key,
-                    horizontal=True,
-                    label_visibility="collapsed"
-                )
-                
-                if feedback_choice == "👍 Gut":
-                    st.session_state.n8n_logger.add_feedback(
-                        interaction_id=interaction_id,
-                        is_helpful=True,
-                        is_accurate=True
-                    )
-                    st.success("Danke für dein Feedback!", icon="✅")
-                    
-                elif feedback_choice == "👎 Schlecht":
-                    # Zeige Kommentarfeld für negatives Feedback
-                    with st.form(f"feedback_form_{interaction_id}"):
-                        st.markdown("**Was war das Problem?**")
-                        user_comment = st.text_area(
-                            "Beschreibe was falsch oder unvollständig war:",
-                            key=f"comment_{interaction_id}",
-                            height=100,
-                            placeholder="z.B. Die Anleitung fehlt für Schritt X, oder die Information ist veraltet..."
-                        )
-                        
-                        if st.form_submit_button("Feedback senden", type="primary"):
-                            if user_comment:
-                                st.session_state.n8n_logger.add_feedback(
-                                    interaction_id=interaction_id,
-                                    is_helpful=False,
-                                    is_accurate=False,
-                                    error_type="User Feedback",
-                                    user_comment=user_comment
-                                )
-                                st.success("Vielen Dank für dein detailliertes Feedback! Das hilft uns sehr.", icon="🙏")
-                            else:
-                                st.warning("Bitte beschreibe kurz das Problem.")
+        # Feedback-Buttons werden jetzt direkt unter der aktuellen Antwort angezeigt
 
 if prompt := st.chat_input("Frag den Academy Helper..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -869,6 +821,52 @@ if prompt := st.chat_input("Frag den Academy Helper..."):
                 st.session_state.last_interaction_id = interaction_id
                 
             st.markdown(response)
+            
+            # Zeige Feedback-Buttons SOFORT unter der Antwort
+            st.markdown("---")
+            st.markdown("**War diese Antwort hilfreich?**")
+            
+            col_gut, col_schlecht = st.columns(2)
+            with col_gut:
+                if st.button("👍 Gut", key=f"good_{interaction_id}", use_container_width=True):
+                    st.session_state.n8n_logger.add_feedback(
+                        interaction_id=interaction_id,
+                        is_helpful=True,
+                        is_accurate=True
+                    )
+                    st.success("Danke für dein Feedback!", icon="✅")
+            
+            with col_schlecht:
+                if st.button("👎 Schlecht", key=f"bad_{interaction_id}", use_container_width=True):
+                    st.session_state[f"show_comment_{interaction_id}"] = True
+                    st.rerun()
+            
+            # Zeige Kommentarformular wenn "Schlecht" geklickt wurde
+            if st.session_state.get(f"show_comment_{interaction_id}", False):
+                with st.form(f"feedback_form_{interaction_id}"):
+                    st.markdown("**Was war das Problem?**")
+                    user_comment = st.text_area(
+                        "Beschreibe was falsch oder unvollständig war:",
+                        key=f"comment_{interaction_id}",
+                        height=100,
+                        placeholder="z.B. Die Anleitung fehlt für Schritt X, oder die Information ist veraltet..."
+                    )
+                    
+                    if st.form_submit_button("Feedback senden", type="primary"):
+                        if user_comment:
+                            st.session_state.n8n_logger.add_feedback(
+                                interaction_id=interaction_id,
+                                is_helpful=False,
+                                is_accurate=False,
+                                error_type="User Feedback",
+                                user_comment=user_comment
+                            )
+                            st.success("Vielen Dank für dein detailliertes Feedback! Das hilft uns sehr.", icon="🙏")
+                            # Verstecke das Formular nach dem Senden
+                            del st.session_state[f"show_comment_{interaction_id}"]
+                            st.rerun()
+                        else:
+                            st.warning("Bitte beschreibe kurz das Problem.")
         
         # Speichere die Nachricht mit interaction_id für späteres Feedback
         st.session_state.messages.append({
