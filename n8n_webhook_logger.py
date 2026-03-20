@@ -39,6 +39,11 @@ class N8NWebhookLogger:
         self.session_data = {}  # Sammelt Daten pro Session
         self.send_queue = Queue()  # Für asynchrones Senden
         
+        # Debug output
+        print(f"🔧 N8N Logger initialisiert:")
+        print(f"   URL: {self.webhook_url[:50]}...")
+        print(f"   API Key: {'✅ Gesetzt' if api_key else '❌ Nicht gesetzt'}")
+        
         # Verschlüsselungssetup
         self.encryption_enabled = bool(api_key) and ENCRYPTION_AVAILABLE
         if self.encryption_enabled:
@@ -274,15 +279,25 @@ class N8NWebhookLogger:
             
             if response.status_code == 200:
                 print(f"✅ Session data sent to N8N: {data['session_id']}")
+                print(f"   Webhook URL: {self.webhook_url[:50]}...")
+                print(f"   Reason: {data.get('send_reason', 'unknown')}")
+                print(f"   Interactions: {len(data.get('interactions', []))}")
             else:
                 print(f"❌ N8N Webhook failed: {response.status_code} - {response.text}")
+                print(f"   URL: {self.webhook_url}")
+                print(f"   Full response: {response.text[:500]}")
                 
         except requests.exceptions.Timeout:
-            print("⏰ N8N Webhook timeout - data might be lost")
-        except requests.exceptions.ConnectionError:
-            print("🔌 N8N Webhook connection error - is N8N running?")
+            print(f"⏰ N8N Webhook timeout - data might be lost")
+            print(f"   URL: {self.webhook_url}")
+        except requests.exceptions.ConnectionError as e:
+            print(f"🔌 N8N Webhook connection error - is N8N running?")
+            print(f"   URL: {self.webhook_url}")
+            print(f"   Error: {e}")
         except Exception as e:
             print(f"❌ N8N Webhook error: {e}")
+            print(f"   URL: {self.webhook_url}")
+            print(f"   Type: {type(e).__name__}")
     
     def _get_user_agent(self):
         """Holt User Agent falls verfügbar"""
