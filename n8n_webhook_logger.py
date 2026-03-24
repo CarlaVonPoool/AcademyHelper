@@ -209,6 +209,12 @@ class N8NWebhookLogger:
             "interaction_id": interaction_id
         }
         
+        # Debug: Zeige was gesendet wird
+        print(f"📤 Sende Q&A: '{current_interaction['question'][:50]}...'")
+        print(f"   Session: {session_id}")
+        print(f"   Interaction ID: {interaction_id}")
+        print(f"   Previous Questions: {len(previous_questions)}")
+        
         # In Queue einreihen für Background-Sending
         self.send_queue.put(payload)
     
