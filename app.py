@@ -289,10 +289,7 @@ if 'session_id' not in st.session_state:
 if 'n8n_logger' not in st.session_state:
     # N8N Webhook URL aus Environment/Secrets - fallback auf lokalen N8N
     n8n_url = os.environ.get("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/feedback")
-    n8n_api_key = os.environ.get("N8N_API_KEY")  # Optional für zusätzliche Sicherheit
-    st.session_state.n8n_logger = N8NWebhookLogger(n8n_url, n8n_api_key)
-if 'last_interaction_id' not in st.session_state:
-    st.session_state.last_interaction_id = None
+    st.session_state.n8n_logger = N8NWebhookLogger(n8n_url)
 
 def auto_load_cache_if_available():
     """Lädt automatisch Cache beim App-Start - IMMER wenn vorhanden."""
@@ -706,51 +703,9 @@ with st.sidebar:
         st.warning("⚠️ Index noch nicht geladen")
     
     if st.button("🗑️ Chat-Verlauf löschen"):
-        # Sende Session-Daten an N8N bevor wir löschen
-        if hasattr(st.session_state, 'n8n_logger'):
-            st.session_state.n8n_logger.send_session_data(reason="chat_cleared")
         st.session_state.messages = []
         st.rerun()
     
-    # N8N Logging Status & Debug
-    st.markdown("---")
-    st.markdown("📊 **N8N Logging**")
-    if hasattr(st.session_state, 'n8n_logger'):
-        try:
-            n8n_stats = st.session_state.n8n_logger.get_session_stats()
-            st.caption(f"Interaktionen: {n8n_stats['interactions']}")
-            st.caption(f"Feedback: {n8n_stats['feedback_count']}")
-            if n8n_stats['interactions'] > 0:
-                st.caption(f"Session seit: {n8n_stats['session_start'][:10]}")
-        except:
-            st.caption("N8N Logger aktiv")
-    
-    # Debug Info (nur für Entwicklung)
-    with st.expander("🔧 Debug Info"):
-        st.caption(f"Webhook URL: {os.environ.get('N8N_WEBHOOK_URL', 'NICHT GESETZT')[:50]}...")
-        st.caption(f"API Key gesetzt: {'✅' if os.environ.get('N8N_API_KEY') else '❌'}")
-        if hasattr(st.session_state, 'n8n_logger'):
-            st.caption(f"Logger initialisiert: ✅")
-            st.caption(f"Verschlüsselung: {'✅' if st.session_state.n8n_logger.encryption_enabled else '❌'}")
-            st.caption(f"Queue Größe: {st.session_state.n8n_logger.send_queue.qsize()}")
-        else:
-            st.caption("Logger initialisiert: ❌")
-        
-        # Test-Button
-        if st.button("🧪 Test Webhook"):
-            try:
-                test_id = st.session_state.n8n_logger.log_interaction(
-                    question="TEST: Debug-Frage vom " + datetime.now().strftime("%H:%M:%S"),
-                    answer="TEST: Debug-Antwort",
-                    sources=["debug.md"],
-                    confidence_score=1.0
-                )
-                st.success(f"Test-Interaction geloggt: {test_id}")
-                # Sende sofort
-                st.session_state.n8n_logger.send_session_data(reason="debug_test")
-                st.success("Session-Daten an N8N gesendet!")
-            except Exception as e:
-                st.error(f"Webhook-Test fehlgeschlagen: {e}")
 
 # Chat Interface
 st.header("💬 Chat mit dem Academy Helper")
@@ -782,8 +737,7 @@ if not st.session_state.messages:
                             context_snippet=context_snippet,
                             confidence_score=confidence
                         )
-                        st.session_state.last_interaction_id = interaction_id
-                    # Speichere die interaction_id mit der Nachricht für späteres Feedback
+                            # Speichere die interaction_id mit der Nachricht für späteres Feedback
                     st.session_state.messages.append({
                         "role": "assistant", 
                         "content": response,
@@ -798,7 +752,63 @@ if not st.session_state.messages:
 for idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        # Feedback-Buttons werden jetzt direkt unter der aktuellen Antwort angezeigt
+        
+        # Zeige Feedback-Buttons für Assistant-Antworten mit interaction_id
+        if message["role"] == "assistant" and "interaction_id" in message:
+            interaction_id = message["interaction_id"]
+            
+            # Nur Feedback-UI anzeigen, wenn noch kein Feedback gegeben wurde
+            already_gave_feedback = st.session_state.get(f"feedback_given_{interaction_id}", False)
+            
+            if not already_gave_feedback:
+                st.markdown("---")
+                st.markdown("**War diese Antwort hilfreich?**")
+                
+                col_gut, col_schlecht = st.columns(2)
+                with col_gut:
+                    if st.button("👍 Gut", key=f"good_hist_{interaction_id}", use_container_width=True):
+                        st.session_state.n8n_logger.add_feedback(
+                            interaction_id=interaction_id,
+                            is_helpful=True,
+                            is_accurate=True
+                        )
+                        st.session_state[f"feedback_given_{interaction_id}"] = True
+                        st.success("Danke für dein Feedback!", icon="✅")
+                        st.rerun()
+                
+                with col_schlecht:
+                    if st.button("👎 Schlecht", key=f"bad_hist_{interaction_id}", use_container_width=True):
+                        st.session_state[f"show_comment_{interaction_id}"] = True
+                        st.rerun()
+                
+                # Zeige Kommentarformular wenn "Schlecht" geklickt wurde
+                if st.session_state.get(f"show_comment_{interaction_id}", False):
+                    with st.form(f"feedback_form_hist_{interaction_id}"):
+                        st.markdown("**Was war das Problem?**")
+                        user_comment = st.text_area(
+                            "Beschreibe was falsch oder unvollständig war:",
+                            key=f"comment_hist_{interaction_id}",
+                            height=100,
+                            placeholder="z.B. Die Anleitung fehlt für Schritt X, oder die Information ist veraltet..."
+                        )
+                        
+                        if st.form_submit_button("Feedback senden", type="primary"):
+                            if user_comment:
+                                st.session_state.n8n_logger.add_feedback(
+                                    interaction_id=interaction_id,
+                                    is_helpful=False,
+                                    is_accurate=False,
+                                    error_type="User Feedback",
+                                    user_comment=user_comment
+                                )
+                                st.session_state[f"feedback_given_{interaction_id}"] = True
+                                del st.session_state[f"show_comment_{interaction_id}"]
+                                st.success("Vielen Dank für dein detailliertes Feedback! Das hilft uns sehr.", icon="🙏")
+                                st.rerun()
+                            else:
+                                st.warning("Bitte beschreibe kurz das Problem.")
+            else:
+                st.info("✓ Feedback bereits erhalten", icon="✅")
 
 if prompt := st.chat_input("Frag den Academy Helper..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -818,7 +828,6 @@ if prompt := st.chat_input("Frag den Academy Helper..."):
                     context_snippet=context_snippet,
                     confidence_score=confidence
                 )
-                st.session_state.last_interaction_id = interaction_id
                 
             st.markdown(response)
             

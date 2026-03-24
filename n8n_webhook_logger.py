@@ -9,49 +9,23 @@ from datetime import datetime
 import hashlib
 import streamlit as st
 from typing import Optional, Dict, List
-import asyncio
 import threading
 from queue import Queue
 import time
-import base64
-import hmac
-import os
 
-# Optional: Import cryptography nur wenn verfügbar
-try:
-    from cryptography.fernet import Fernet
-    ENCRYPTION_AVAILABLE = True
-except ImportError:
-    ENCRYPTION_AVAILABLE = False
-    print("⚠️ Cryptography library nicht installiert - Verschlüsselung deaktiviert")
 
 class N8NWebhookLogger:
-    def __init__(self, n8n_webhook_url: str, api_key: Optional[str] = None):
+    def __init__(self, n8n_webhook_url: str):
         """
-        N8N Webhook Logger mit Verschlüsselung
+        N8N Webhook Logger
         
         Args:
-            n8n_webhook_url: Die N8N Webhook URL (HTTPS empfohlen!)
-            api_key: Optional API Key für Authentifizierung und Verschlüsselung
+            n8n_webhook_url: Die N8N Webhook URL
         """
         self.webhook_url = n8n_webhook_url
-        self.api_key = api_key
         self.session_data = {}  # Sammelt Daten pro Session
         self.send_queue = Queue()  # Für asynchrones Senden
         
-        # Debug output
-        print(f"🔧 N8N Logger initialisiert:")
-        print(f"   URL: {self.webhook_url[:50]}...")
-        print(f"   API Key: {'✅ Gesetzt' if api_key else '❌ Nicht gesetzt'}")
-        
-        # Verschlüsselungssetup
-        self.encryption_enabled = bool(api_key) and ENCRYPTION_AVAILABLE
-        if self.encryption_enabled:
-            # Generiere Fernet-Key aus API Key
-            key_material = hashlib.sha256(api_key.encode()).digest()
-            self.cipher = Fernet(base64.urlsafe_b64encode(key_material))
-        else:
-            self.cipher = None
             
         self._start_background_sender()
         
@@ -72,51 +46,7 @@ class N8NWebhookLogger:
         thread = threading.Thread(target=background_sender, daemon=True)
         thread.start()
     
-    def _encrypt_sensitive_data(self, data: Dict) -> Dict:
-        """
-        Verschlüsselt sensible Daten in der Payload
-        """
-        if not self.encryption_enabled:
-            return data
-        
-        encrypted_data = data.copy()
-        
-        # Verschlüssele sensible Felder
-        sensitive_fields = ['question', 'answer', 'user_comment', 'expected_answer']
-        
-        for interaction in encrypted_data.get('interactions', []):
-            for field in sensitive_fields:
-                if field in interaction and interaction[field]:
-                    try:
-                        # Verschlüssele den Text
-                        encrypted_text = self.cipher.encrypt(interaction[field].encode('utf-8'))
-                        interaction[field] = base64.b64encode(encrypted_text).decode('utf-8')
-                        interaction[f"{field}_encrypted"] = True
-                    except Exception as e:
-                        print(f"Verschlüsselungsfehler für {field}: {e}")
-                        # Fallback: Feld entfernen statt unverschlüsselt zu senden
-                        interaction[field] = "[VERSCHLÜSSELUNGSFEHLER]"
-        
-        return encrypted_data
     
-    def _create_signature(self, payload: Dict) -> str:
-        """
-        Erstellt HMAC-Signatur für Payload-Integrität
-        """
-        if not self.api_key:
-            return ""
-        
-        # Erstelle deterministischen String aus Payload
-        payload_string = json.dumps(payload, sort_keys=True, separators=(',', ':'))
-        
-        # HMAC-SHA256 Signatur
-        signature = hmac.new(
-            self.api_key.encode('utf-8'),
-            payload_string.encode('utf-8'), 
-            hashlib.sha256
-        ).hexdigest()
-        
-        return signature
     
     def log_interaction(self, 
                        question: str,
@@ -159,9 +89,13 @@ class N8NWebhookLogger:
         
         self.session_data[session_id]["interactions"].append(interaction)
         
-        # IMMER sofort nach jeder Frage senden
-        # So bekommst du JEDE Frage-Antwort Kombination sofort
-        self.send_session_data(session_id, reason="new_question_answered")
+        # Hole vorherige Fragen für die Session (ohne die aktuelle)
+        previous_questions = []
+        for i in self.session_data[session_id]["interactions"][:-1]:  # Alle außer der letzten
+            previous_questions.append(i["question"])
+        
+        # Sende NUR die aktuelle Frage+Antwort mit vorherigen Fragen als Kontext
+        self.send_current_qa(interaction_id, session_id, previous_questions)
         
         return interaction_id
     
@@ -193,111 +127,114 @@ class N8NWebhookLogger:
                 }
                 self.session_data[session_id]["feedback_count"] += 1
                 
-                # Bei Feedback: Update senden mit dem aktualisierten Feedback
-                self.send_session_data(session_id, reason="feedback_added_to_interaction")
+                # Hole vorherige Fragen für die Session
+                previous_questions = []
+                for i in self.session_data[session_id]["interactions"]:
+                    if i["id"] != interaction_id:  # Alle außer der aktuellen
+                        previous_questions.append(i["question"])
+                
+                # Sende separaten Webhook für Feedback
+                self.send_feedback_webhook(interaction, session_id, previous_questions)
                 break
     
-    def send_session_data(self, session_id: str = None, reason: str = "session_end"):
-        """
-        Sendet gesammelte Session-Daten an N8N
-        """
-        if session_id is None:
-            session_id = st.session_state.get('session_id', 'unknown')
-        
-        if session_id not in self.session_data:
-            return
-        
-        session_data = self.session_data[session_id].copy()
-        session_data["session_end"] = datetime.now().isoformat()
-        session_data["send_reason"] = reason
-        
-        # Statistiken hinzufügen
-        interactions = session_data["interactions"]
-        session_data["statistics"] = {
-            "total_interactions": len(interactions),
-            "avg_confidence": sum(i.get("confidence_score", 0) for i in interactions) / len(interactions) if interactions else 0,
-            "feedback_received": session_data["feedback_count"],
-            "helpful_feedback": sum(1 for i in interactions if i.get("feedback") and i["feedback"].get("is_helpful") == True),
-            "unhelpful_feedback": sum(1 for i in interactions if i.get("feedback") and i["feedback"].get("is_helpful") == False),
-            "accurate_feedback": sum(1 for i in interactions if i.get("feedback") and i["feedback"].get("is_accurate") == True),
-            "inaccurate_feedback": sum(1 for i in interactions if i.get("feedback") and i["feedback"].get("is_accurate") == False),
-        }
-        
-        # In Queue einreihen für Background-Sending
-        self.send_queue.put(session_data)
-        
-        # Session-Daten NICHT löschen, außer bei explizitem Ende
-        # So können wir Updates senden (z.B. wenn Feedback hinzugefügt wird)
-        if reason in ["session_end", "chat_cleared"]:
-            del self.session_data[session_id]
-    
-    def send_all_sessions(self, reason: str = "app_shutdown"):
-        """Sendet alle offenen Sessions"""
-        for session_id in list(self.session_data.keys()):
-            self.send_session_data(session_id, reason=reason)
     
     def _send_to_n8n(self, data: Dict):
         """
-        Sendet verschlüsselte Daten per HTTP POST an N8N Webhook
+        Sendet Daten per HTTP POST an N8N Webhook
         """
         try:
-            # Verschlüssele sensible Daten
-            encrypted_session_data = self._encrypt_sensitive_data(data)
-            
-            # Payload für N8N
-            payload = {
-                "timestamp": datetime.now().isoformat(),
-                "source": "streamlit_academy_helper",
-                "session_data": encrypted_session_data,
-                "encryption_enabled": self.encryption_enabled,
-                "webhook_version": "2.0"
-            }
-            
-            # Erstelle Signatur
-            signature = self._create_signature(payload)
+            # Prüfe ob es sich um neue Webhook-Typen handelt
+            if "webhook_type" in data:
+                # Direkte Payload für neue Webhook-Typen
+                payload = data
+            else:
+                # Alte Session-Daten (fallback)
+                payload = {
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "streamlit_academy_helper",
+                    "session_data": data,
+                    "webhook_version": "2.0"
+                }
             
             headers = {
                 'Content-Type': 'application/json',
-                'User-Agent': 'StreamlitApp/2.0-Encrypted'
+                'User-Agent': 'StreamlitApp/2.0'
             }
             
-            # Sicherheitsheader hinzufügen
-            if self.api_key:
-                headers['Authorization'] = f'Bearer {self.api_key}'
-                headers['X-API-Key'] = self.api_key
-                headers['X-Webhook-Signature'] = signature
-                headers['X-Timestamp'] = str(int(datetime.now().timestamp()))
-            
-            # HTTP POST Request über HTTPS
+            # HTTP POST Request
             response = requests.post(
                 self.webhook_url,
                 json=payload,
                 headers=headers,
-                timeout=15,  # Längeres Timeout für Verschlüsselung
-                verify=True  # SSL Certificate Verification
+                timeout=10
             )
             
-            if response.status_code == 200:
-                print(f"✅ Session data sent to N8N: {data['session_id']}")
-                print(f"   Webhook URL: {self.webhook_url[:50]}...")
-                print(f"   Reason: {data.get('send_reason', 'unknown')}")
-                print(f"   Interactions: {len(data.get('interactions', []))}")
-            else:
-                print(f"❌ N8N Webhook failed: {response.status_code} - {response.text}")
-                print(f"   URL: {self.webhook_url}")
-                print(f"   Full response: {response.text[:500]}")
+            if response.status_code != 200:
+                print(f"❌ N8N Webhook failed: {response.status_code}")
                 
         except requests.exceptions.Timeout:
-            print(f"⏰ N8N Webhook timeout - data might be lost")
-            print(f"   URL: {self.webhook_url}")
-        except requests.exceptions.ConnectionError as e:
-            print(f"🔌 N8N Webhook connection error - is N8N running?")
-            print(f"   URL: {self.webhook_url}")
-            print(f"   Error: {e}")
+            print(f"⏰ N8N Webhook timeout")
+        except requests.exceptions.ConnectionError:
+            print(f"🔌 N8N Webhook connection error")
         except Exception as e:
-            print(f"❌ N8N Webhook error: {e}")
-            print(f"   URL: {self.webhook_url}")
-            print(f"   Type: {type(e).__name__}")
+            print(f"❌ N8N Webhook error: {type(e).__name__}")
+    
+    def send_current_qa(self, interaction_id: str, session_id: str, previous_questions: List[str]):
+        """
+        Sendet nur die aktuelle Frage+Antwort mit vorherigen Fragen als Kontext
+        """
+        if session_id not in self.session_data:
+            return
+        
+        # Finde die aktuelle Interaktion
+        current_interaction = None
+        for interaction in self.session_data[session_id]["interactions"]:
+            if interaction["id"] == interaction_id:
+                current_interaction = interaction
+                break
+        
+        if not current_interaction:
+            return
+        
+        # Erstelle Payload mit nur der aktuellen Frage+Antwort
+        payload = {
+            "webhook_type": "Frage+Antwort",
+            "session_id": session_id,
+            "timestamp": datetime.now().isoformat(),
+            "aktuelle_frage": current_interaction["question"],
+            "aktuelle_antwort": current_interaction["answer"],
+            "VorherigeFragen": previous_questions,  # Liste der vorherigen Fragen
+            "sources": current_interaction.get("sources", []),
+            "confidence_score": current_interaction.get("confidence_score", 0.0),
+            "interaction_id": interaction_id
+        }
+        
+        # In Queue einreihen für Background-Sending
+        self.send_queue.put(payload)
+    
+    def send_feedback_webhook(self, interaction: Dict, session_id: str, previous_questions: List[str]):
+        """
+        Sendet separaten Webhook für Feedback mit Frage+Antwort+Feedback
+        """
+        if not interaction.get("feedback"):
+            return
+        
+        # Erstelle Payload mit Frage+Antwort+Feedback
+        payload = {
+            "webhook_type": "Feedback+Frage",
+            "session_id": session_id,
+            "timestamp": datetime.now().isoformat(),
+            "frage": interaction["question"],
+            "antwort": interaction["answer"],
+            "feedback": interaction["feedback"],
+            "VorherigeFragen": previous_questions,  # Liste der vorherigen Fragen
+            "sources": interaction.get("sources", []),
+            "confidence_score": interaction.get("confidence_score", 0.0),
+            "interaction_id": interaction["id"]
+        }
+        
+        # In Queue einreihen für Background-Sending
+        self.send_queue.put(payload)
     
     def _get_user_agent(self):
         """Holt User Agent falls verfügbar"""
