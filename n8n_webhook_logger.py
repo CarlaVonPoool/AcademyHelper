@@ -23,7 +23,6 @@ class N8NWebhookLogger:
             n8n_webhook_url: Die N8N Webhook URL
         """
         self.webhook_url = n8n_webhook_url
-        self.session_data = {}  # Sammelt Daten pro Session
         self.send_queue = Queue()  # Für asynchrones Senden
         
             
@@ -63,39 +62,18 @@ class N8NWebhookLogger:
         
         session_id = st.session_state.get('session_id', 'unknown')
         
-        # Speichere in Session-Data
-        if session_id not in self.session_data:
-            self.session_data[session_id] = {
-                "session_id": session_id,
-                "session_start": timestamp,
-                "interactions": [],
-                "feedback_count": 0,
-                "metadata": {
-                    "app_version": "1.0",
-                    "user_agent": self._get_user_agent()
-                }
-            }
-        
-        interaction = {
-            "id": interaction_id,
-            "timestamp": timestamp,
-            "question": question[:500],  # Limitiere Länge
-            "answer": answer[:1000],
-            "sources": sources or [],
-            "context_snippet": context_snippet[:300],
-            "confidence_score": confidence_score,
-            "feedback": None  # Wird später ergänzt
-        }
-        
-        self.session_data[session_id]["interactions"].append(interaction)
-        
-        # Hole vorherige Fragen für die Session (ohne die aktuelle)
+        # Hole vorherige Fragen aus Streamlit Session State
         previous_questions = []
-        for i in self.session_data[session_id]["interactions"][:-1]:  # Alle außer der letzten
-            previous_questions.append(i["question"])
+        for msg in st.session_state.get('messages', []):
+            if msg.get('role') == 'user':
+                previous_questions.append(msg['content'])
         
-        # Sende NUR die aktuelle Frage+Antwort mit vorherigen Fragen als Kontext
-        self.send_current_qa(interaction_id, session_id, previous_questions)
+        # Entferne die aktuelle Frage aus den vorherigen
+        if question in previous_questions:
+            previous_questions = [q for q in previous_questions if q != question]
+        
+        # Sende direkt die aktuelle Frage+Antwort
+        self.send_current_qa_direct(interaction_id, session_id, question, answer, sources, confidence_score, previous_questions)
         
         return interaction_id
     
@@ -111,31 +89,39 @@ class N8NWebhookLogger:
         """
         session_id = st.session_state.get('session_id', 'unknown')
         
-        if session_id not in self.session_data:
+        # Finde die entsprechende Nachricht in den Streamlit Messages
+        question = None
+        answer = None
+        for msg in st.session_state.get('messages', []):
+            if msg.get('role') == 'assistant' and msg.get('interaction_id') == interaction_id:
+                answer = msg['content']
+                # Finde die zugehörige Frage (die Nachricht davor)
+                msg_index = st.session_state.messages.index(msg)
+                if msg_index > 0 and st.session_state.messages[msg_index-1]['role'] == 'user':
+                    question = st.session_state.messages[msg_index-1]['content']
+                break
+        
+        if not question or not answer:
             return
         
-        # Finde die richtige Interaktion
-        for interaction in self.session_data[session_id]["interactions"]:
-            if interaction["id"] == interaction_id:
-                interaction["feedback"] = {
-                    "timestamp": datetime.now().isoformat(),
-                    "is_helpful": is_helpful,
-                    "is_accurate": is_accurate,
-                    "error_type": error_type,
-                    "user_comment": user_comment[:500],
-                    "expected_answer": expected_answer[:500]
-                }
-                self.session_data[session_id]["feedback_count"] += 1
-                
-                # Hole vorherige Fragen für die Session
-                previous_questions = []
-                for i in self.session_data[session_id]["interactions"]:
-                    if i["id"] != interaction_id:  # Alle außer der aktuellen
-                        previous_questions.append(i["question"])
-                
-                # Sende separaten Webhook für Feedback
-                self.send_feedback_webhook(interaction, session_id, previous_questions)
-                break
+        # Hole vorherige Fragen
+        previous_questions = []
+        for msg in st.session_state.get('messages', []):
+            if msg.get('role') == 'user' and msg['content'] != question:
+                previous_questions.append(msg['content'])
+        
+        # Erstelle Feedback-Objekt
+        feedback = {
+            "timestamp": datetime.now().isoformat(),
+            "is_helpful": is_helpful,
+            "is_accurate": is_accurate,
+            "error_type": error_type,
+            "user_comment": user_comment[:500],
+            "expected_answer": expected_answer[:500]
+        }
+        
+        # Sende separaten Webhook für Feedback
+        self.send_feedback_webhook_direct(interaction_id, session_id, question, answer, feedback, previous_questions)
     
     
     def _send_to_n8n(self, data: Dict):
@@ -143,18 +129,8 @@ class N8NWebhookLogger:
         Sendet Daten per HTTP POST an N8N Webhook
         """
         try:
-            # Prüfe ob es sich um neue Webhook-Typen handelt
-            if "webhook_type" in data:
-                # Direkte Payload für neue Webhook-Typen
-                payload = data
-            else:
-                # Alte Session-Daten (fallback)
-                payload = {
-                    "timestamp": datetime.now().isoformat(),
-                    "source": "streamlit_academy_helper",
-                    "session_data": data,
-                    "webhook_version": "2.0"
-                }
+            # Direkte Payload für Webhook-Typen
+            payload = data
             
             headers = {
                 'Content-Type': 'application/json',
@@ -179,38 +155,25 @@ class N8NWebhookLogger:
         except Exception as e:
             print(f"❌ N8N Webhook error: {type(e).__name__}")
     
-    def send_current_qa(self, interaction_id: str, session_id: str, previous_questions: List[str]):
+    def send_current_qa_direct(self, interaction_id: str, session_id: str, question: str, answer: str, sources: List[str], confidence_score: float, previous_questions: List[str]):
         """
         Sendet nur die aktuelle Frage+Antwort mit vorherigen Fragen als Kontext
         """
-        if session_id not in self.session_data:
-            return
-        
-        # Finde die aktuelle Interaktion
-        current_interaction = None
-        for interaction in self.session_data[session_id]["interactions"]:
-            if interaction["id"] == interaction_id:
-                current_interaction = interaction
-                break
-        
-        if not current_interaction:
-            return
-        
         # Erstelle Payload mit nur der aktuellen Frage+Antwort
         payload = {
             "webhook_type": "Frage+Antwort",
             "session_id": session_id,
             "timestamp": datetime.now().isoformat(),
-            "aktuelle_frage": current_interaction["question"],
-            "aktuelle_antwort": current_interaction["answer"],
+            "aktuelle_frage": question[:500],
+            "aktuelle_antwort": answer[:1000],
             "VorherigeFragen": previous_questions,  # Liste der vorherigen Fragen
-            "sources": current_interaction.get("sources", []),
-            "confidence_score": current_interaction.get("confidence_score", 0.0),
+            "sources": sources or [],
+            "confidence_score": confidence_score,
             "interaction_id": interaction_id
         }
         
         # Debug: Zeige was gesendet wird
-        print(f"📤 Sende Q&A: '{current_interaction['question'][:50]}...'")
+        print(f"📤 Sende Q&A: '{question[:50]}...'")
         print(f"   Session: {session_id}")
         print(f"   Interaction ID: {interaction_id}")
         print(f"   Previous Questions: {len(previous_questions)}")
@@ -218,26 +181,27 @@ class N8NWebhookLogger:
         # In Queue einreihen für Background-Sending
         self.send_queue.put(payload)
     
-    def send_feedback_webhook(self, interaction: Dict, session_id: str, previous_questions: List[str]):
+    def send_feedback_webhook_direct(self, interaction_id: str, session_id: str, question: str, answer: str, feedback: Dict, previous_questions: List[str]):
         """
         Sendet separaten Webhook für Feedback mit Frage+Antwort+Feedback
         """
-        if not interaction.get("feedback"):
-            return
-        
         # Erstelle Payload mit Frage+Antwort+Feedback
         payload = {
             "webhook_type": "Feedback+Frage",
             "session_id": session_id,
             "timestamp": datetime.now().isoformat(),
-            "frage": interaction["question"],
-            "antwort": interaction["answer"],
-            "feedback": interaction["feedback"],
+            "frage": question[:500],
+            "antwort": answer[:1000],
+            "feedback": feedback,
             "VorherigeFragen": previous_questions,  # Liste der vorherigen Fragen
-            "sources": interaction.get("sources", []),
-            "confidence_score": interaction.get("confidence_score", 0.0),
-            "interaction_id": interaction["id"]
+            "sources": [],
+            "confidence_score": 0.0,
+            "interaction_id": interaction_id
         }
+        
+        # Debug: Zeige was gesendet wird
+        print(f"📤 Sende Feedback: '{question[:50]}...'")
+        print(f"   Feedback: {feedback.get('is_helpful')}")
         
         # In Queue einreihen für Background-Sending
         self.send_queue.put(payload)
@@ -250,17 +214,3 @@ class N8NWebhookLogger:
         except:
             return "Unknown"
     
-    def get_session_stats(self, session_id: str = None):
-        """Holt aktuelle Session-Statistiken"""
-        if session_id is None:
-            session_id = st.session_state.get('session_id', 'unknown')
-            
-        if session_id not in self.session_data:
-            return {"interactions": 0, "feedback": 0}
-        
-        data = self.session_data[session_id]
-        return {
-            "interactions": len(data["interactions"]),
-            "feedback_count": data["feedback_count"],
-            "session_start": data["session_start"]
-        }
