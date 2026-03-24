@@ -228,49 +228,6 @@ def clear_cache():
         return True
     return False
 
-# Passwort-Authentifizierung
-def check_password():
-    """Überprüft das Passwort und zeigt Login-Form an."""
-    
-    # Passwort aus Umgebungsvariablen laden
-    correct_password = os.environ.get("APP_PASSWORD", "please-set-password-in-secrets")
-    
-    if st.session_state.authenticated:
-        return True
-    
-    st.title("Poool Academy Helper - Login")
-    st.markdown("**Bitte gib das Passwort ein, um auf den Academy Helper zuzugreifen:**")
-    
-    with st.form("password_form"):
-        password = st.text_input("Passwort:", type="password", help="Kontaktiere den Administrator für das Passwort")
-        submit = st.form_submit_button("🚀 Anmelden")
-        
-        if submit:
-            if password == correct_password:
-                st.session_state.authenticated = True
-                st.success("✅ Erfolgreich angemeldet!")
-                st.rerun()
-            else:
-                st.error("❌ Falsches Passwort! Bitte versuche es erneut.")
-                st.stop()
-    
-    # Info-Box für Benutzer
-    with st.expander("ℹ️ Über den Poool Academy Helper"):
-        st.markdown("""
-        **Poool Academy Helper** ist dein intelligenter Assistent für alle Fragen rund um Poool.
-        
-        **Was kannst du fragen?**
-        - 📋 Wie erstelle ich Rechnungen und Angebote?
-        - 📅 Wie funktioniert die Terminbuchung?
-        - 👥 Wie verwalte ich Kundendaten?
-        - 🎓 Wie erstelle und verwalte ich Kurse?
-        - 📊 Wie nutze ich das Reporting?
-        - 💳 Wie richte ich Zahlungen ein?
-        
-        **Benötigst du Zugang?** Kontaktiere das Poool Team.
-        """)
-    
-    st.stop()
 
 # Globale Variablen
 if 'document_store' not in st.session_state:
@@ -279,8 +236,6 @@ if 'embeddings' not in st.session_state:
     st.session_state.embeddings = None
 if 'messages' not in st.session_state:
     st.session_state.messages = []
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
 if 'cache_loaded' not in st.session_state:
     st.session_state.cache_loaded = False
 if 'session_id' not in st.session_state:
@@ -606,17 +561,10 @@ KRITISCH: Denke dir NIE etwas aus! Nutze NUR das Wissen aus den bereitgestellten
 # Streamlit UI
 st.set_page_config(page_title="Poool Academy Helper", page_icon="📚", layout="wide")
 
-# Passwort-Schutz prüfen
-check_password()
 
 # Automatisch Cache laden, falls verfügbar
 auto_load_cache_if_available()
 
-# Logout-Button in der Sidebar
-with st.sidebar:
-    if st.button("🚪 Abmelden"):
-        st.session_state.authenticated = False
-        st.rerun()
 
 st.title("Poool Academy Helper")
 st.markdown("Dein intelligenter Assistent für alle Fragen rund um Poool - stelle Fragen zu Funktionen, Abläufen und Best Practices!")

@@ -62,15 +62,27 @@ class N8NWebhookLogger:
         
         session_id = st.session_state.get('session_id', 'unknown')
         
+        # Debug: Zeige alle Messages
+        print(f"🔍 DEBUG: Aktuelle Frage: '{question[:50]}...'")
+        print(f"🔍 DEBUG: Anzahl Messages in Session: {len(st.session_state.get('messages', []))}")
+        
         # Hole vorherige Fragen aus Streamlit Session State
         previous_questions = []
-        for msg in st.session_state.get('messages', []):
+        for i, msg in enumerate(st.session_state.get('messages', [])):
+            print(f"   Message {i}: {msg.get('role')} - '{msg.get('content', '')[:30]}...'")
             if msg.get('role') == 'user':
                 previous_questions.append(msg['content'])
+        
+        print(f"🔍 DEBUG: Gefundene User-Fragen: {len(previous_questions)}")
+        for i, q in enumerate(previous_questions):
+            print(f"   Frage {i}: '{q[:30]}...'")
         
         # Entferne die aktuelle Frage aus den vorherigen
         if question in previous_questions:
             previous_questions = [q for q in previous_questions if q != question]
+            print(f"🔍 DEBUG: Aktuelle Frage aus vorherigen entfernt")
+        
+        print(f"🔍 DEBUG: Finale vorherige Fragen: {len(previous_questions)}")
         
         # Sende direkt die aktuelle Frage+Antwort
         self.send_current_qa_direct(interaction_id, session_id, question, answer, sources, confidence_score, previous_questions)
